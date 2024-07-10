@@ -1,0 +1,149 @@
+# this is i have used with esp32 with filesystem.to make it work in offline and online both the mode. means if i will disconnect the ethernet then also it work. means now the command is not coming from the services. in th offline mode it will check it through the filesystem
+import machine
+import network
+import usocket as socket
+import ujson as json
+
+# Replace with your WiFi SSID and password
+WIFI_SSID = "YourWiFiSSID"
+WIFI_PASSWORD = "YourWiFiPassword"
+
+# Replace with your Django server IP address and port
+SERVER_IP = "192.168.178.76"
+SERVER_PORT = 8000
+
+# UART setup for RFID reader
+uart = machine.UART(1, baudrate=9600, rx=16, tx=17)
+
+# Filesystem setup
+import os
+if 'rfid_data' not in os.listdir():
+    os.mkdir('rfid_data')
+
+master_rfid_file = 'rfid_data/master_rfid.txt'
+visitor_rfid_file = 'rfid_data/visitor_rfid.txt'
+
+# Replace with actual pin assignments for controlling turnstile gate and LEDs
+# Example: Assuming GPIO 26 and 27 control gate, GPIO 32 controls gate LEDs (replace with actual pins)
+GATE_OPEN_PIN = machine.Pin(26, machine.Pin.OUT)
+GATE_CLOSE_PIN = machine.Pin(27, machine.Pin.OUT)
+LED_RELAY_PIN = machine.Pin(32, machine.Pin.OUT)
+
+# Connect to WiFi
+def connect_wifi():
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    if not wlan.isconnected():
+        print('Connecting to WiFi...')
+        wlan.connect(WIFI_SSID, WIFI_PASSWORD)
+        while not wlan.isconnected():
+            pass
+    print('WiFi connected')
+    print('IP address:', wlan.ifconfig()[0])
+
+# Function to check if tag is in master list
+def is_master_tag(tag_uid):
+    return check_tag_in_file(tag_uid, master_rfid_file)
+
+# Function to check if tag is in visitor list
+def is_visitor_tag(tag_uid):
+    return check_tag_in_file(tag_uid, visitor_rfid_file)
+
+# Function to check tag in file
+def check_tag_in_file(tag_uid, filename):
+    try:
+        with open(filename, 'r') as file:
+            for line in file:
+                stored_tag = line.strip()
+                if stored_tag == tag_uid:
+                    return True
+    except OSError:
+        print('Failed to open file:', filename)
+    return False
+
+# Function to open the gate
+def open_gate():
+    GATE_OPEN_PIN.on()
+    machine.delay(1000)  # Adjust delay as per gate mechanism
+    GATE_OPEN_PIN.off()
+    print('Gate opened')
+
+# Function to close the gate (if needed)
+def close_gate():
+    GATE_CLOSE_PIN.on()
+    machine.delay(1000)  # Adjust delay as per gate mechanism
+    GATE_CLOSE_PIN.off()
+    print('Gate closed')
+
+# Function to control gate LEDs
+def control_leds(state):
+    LED_RELAY_PIN.value(state)
+    print('LEDs state:', 'ON' if state else 'OFF')
+
+# Function to handle RFID tag processing
+def process_rfid():
+    while True:
+        if uart.any():
+            tag_uid = uart.readline().decode().strip()
+            print('RFID tag detected:', tag_uid)
+            
+            if is_master_tag(tag_uid):
+                # Directly open gate for master tag
+                open_gate()
+                control_leds(True)  # Turn on LEDs for master access
+                # Inform server with ESD status (assumed to be passed for master)
+                send_to_server('MASTER_OPEN', tag_uid, esd_status='PASSED')
+            elif is_visitor_tag(tag_uid):
+                # Check with server for visitor tag and ESD
+                esd_passed = check_esd()
+                if esd_passed:
+                    open_gate()
+                    control_leds(True)  # Turn on LEDs for visitor access
+                    send_to_server('VISITOR_OPEN', tag_uid, esd_status='PASSED')
+                else:
+                    print('Unauthorized access (ESD not passed)')
+                    control_leds(False)  # Turn off LEDs for unauthorized access
+                    send_to_server('VISITOR_DENIED', tag_uid, esd_status='FAILED')
+                    # Handle unauthorized access (e.g., sound alarm)
+            else:
+                print('RFID not authorized')
+                control_leds(False)  # Turn off LEDs for unauthorized access
+                send_to_server('RFID_UNAUTHORIZED', tag_uid, esd_status='N/A')
+                # Handle unauthorized RFID (e.g., sound alarm)
+            # Delay to prevent rapid reads
+            machine.delay(5000)
+
+# Function to check ESD
+def check_esd():
+    # Simulate checking the ESD (replace with actual logic)
+    # For example, if a button or sensor indicates ESD pass, return True
+    # Otherwise, return False
+    # Example: Assuming GPIO 14 reads ESD status (replace with actual pin)
+    esd_status = machine.Pin(14, machine.Pin.IN).value()
+    return esd_status == 1  # Assuming 1 indicates ESD passed
+
+# Function to send data to Django server
+def send_to_server(command, tag_uid=None, esd_status='N/A'):
+    try:
+        addr = socket.getaddrinfo(SERVER_IP, SERVER_PORT)[0][-1]
+        s = socket.socket()
+        s.connect(addr)
+        
+        data = {
+            'command': command,
+            'tag_uid': tag_uid,
+            'esd_status': esd_status
+        }
+        s.send(json.dumps(data) + '\r\n')
+        
+        response = s.recv(1024).decode().strip()
+        s.close()
+        
+        return response
+    except OSError as e:
+        print('Socket error:', e)
+        return ''
+
+# Main execution
+connect_wifi()
+process_rfid()
