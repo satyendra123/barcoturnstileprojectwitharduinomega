@@ -29,9 +29,10 @@ GATE_OPEN_PIN = machine.Pin(26, machine.Pin.OUT)
 GATE_CLOSE_PIN = machine.Pin(27, machine.Pin.OUT)
 LED_RELAY_PIN = machine.Pin(32, machine.Pin.OUT)
 
+wlan = network.WLAN(network.STA_IF)
+
 # Connect to WiFi
 def connect_wifi():
-    wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     if not wlan.isconnected():
         print('Connecting to WiFi...')
@@ -87,29 +88,39 @@ def process_rfid():
             tag_uid = uart.readline().decode().strip()
             print('RFID tag detected:', tag_uid)
             
-            if is_master_tag(tag_uid):
-                # Directly open gate for master tag
-                open_gate()
-                control_leds(True)  # Turn on LEDs for master access
-                # Inform server with ESD status (assumed to be passed for master)
-                send_to_server('MASTER_OPEN', tag_uid, esd_status='PASSED')
-            elif is_visitor_tag(tag_uid):
-                # Check with server for visitor tag and ESD
+            if wlan.isconnected():
+                print('Online mode')
+                # Send RFID and ESD data to server
                 esd_passed = check_esd()
-                if esd_passed:
+                esd_status = 'PASSED' if esd_passed else 'FAILED'
+                response = send_to_server('CHECK_ACCESS', tag_uid, esd_status)
+                
+                if response == '|OPENEN%':
                     open_gate()
-                    control_leds(True)  # Turn on LEDs for visitor access
-                    send_to_server('VISITOR_OPEN', tag_uid, esd_status='PASSED')
+                    control_leds(True)
                 else:
-                    print('Unauthorized access (ESD not passed)')
-                    control_leds(False)  # Turn off LEDs for unauthorized access
-                    send_to_server('VISITOR_DENIED', tag_uid, esd_status='FAILED')
-                    # Handle unauthorized access (e.g., sound alarm)
+                    print('Unauthorized access')
+                    control_leds(False)
             else:
-                print('RFID not authorized')
-                control_leds(False)  # Turn off LEDs for unauthorized access
-                send_to_server('RFID_UNAUTHORIZED', tag_uid, esd_status='N/A')
-                # Handle unauthorized RFID (e.g., sound alarm)
+                print('Offline mode')
+                if is_master_tag(tag_uid):
+                    # Directly open gate for master tag
+                    open_gate()
+                    control_leds(True)  # Turn on LEDs for master access
+                elif is_visitor_tag(tag_uid):
+                    # Check ESD status for visitor tag
+                    esd_passed = check_esd()
+                    if esd_passed:
+                        open_gate()
+                        control_leds(True)  # Turn on LEDs for visitor access
+                    else:
+                        print('Unauthorized access (ESD not passed)')
+                        control_leds(False)  # Turn off LEDs for unauthorized access
+                        # Handle unauthorized access (e.g., sound alarm)
+                else:
+                    print('RFID not authorized')
+                    control_leds(False)  # Turn off LEDs for unauthorized access
+                    # Handle unauthorized RFID (e.g., sound alarm)
             # Delay to prevent rapid reads
             machine.delay(5000)
 
