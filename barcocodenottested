@@ -32,6 +32,7 @@ byte visitorUIDs[][4] = {
 
 int totalMasterUIDs = sizeof(masterUIDs) / sizeof(masterUIDs[0]);
 int totalVisitorUIDs = sizeof(visitorUIDs) / sizeof(visitorUIDs[0]);
+int totalcards = totalMasterUIDs + totalVisitorUIDs;
 
 void setup() {
   Serial.begin(9600);
@@ -49,6 +50,8 @@ void setup() {
   SPI.begin();
   mfrc522.PCD_Init();
   Serial.println("RFID reader initialized");
+  Serial.print("total stored cards: ");
+  Serial.print(totalcards);
 }
 
 void loop() {
