@@ -167,6 +167,173 @@ void triggerRelay() {
 }
 
 
+#EX-2 using wiegand protocol
+#include <SPI.h>
+#include <Ethernet.h>
+#include <Wiegand.h>
+
+#define RELAY_PIN 7
+#define LED_PIN 6
+
+// Replace with your network settings
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+IPAddress serverIP(192, 168, 1, 151);  // IP address of your TCP server
+int serverPort = 6000;  // Port number of your TCP server
+EthernetClient client;
+
+// Wiegand setup
+WIEGAND wg;
+
+// List of master card IDs (replace with your card IDs)
+unsigned long masterCardIDs[] = {
+  0x4CCDD222,  // Example master card ID 1
+  // Add other master card IDs here
+};
+
+// List of visitor card IDs (replace with your card IDs)
+unsigned long visitorCardIDs[] = {
+  0x34A2BC10,  // Example visitor card ID 1
+  // Add other visitor card IDs here
+};
+
+int totalMasterCards = sizeof(masterCardIDs) / sizeof(masterCardIDs[0]);
+int totalVisitorCards = sizeof(visitorCardIDs) / sizeof(visitorCardIDs[0]);
+int totalCards = totalMasterCards + totalVisitorCards;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW);
+  digitalWrite(LED_PIN, LOW);
+
+  Ethernet.begin(mac);
+  delay(1500);  // Allow time to initialize Ethernet
+  Serial.println("Ethernet connected");
+  Serial.print("IP address: ");
+  Serial.println(Ethernet.localIP());
+
+  wg.begin();
+  Serial.println("Wiegand reader initialized");
+  Serial.print("Total stored cards: ");
+  Serial.println(totalCards);
+}
+
+void loop() {
+  if (Ethernet.linkStatus() == LinkON) {
+    handleOnlineMode();
+  } else {
+    handleOfflineMode();
+  }
+}
+
+void handleOnlineMode() {
+  if (client.connect(serverIP, serverPort)) {
+    Serial.println("Connected to server");
+
+    // Read RFID data via Wiegand protocol
+    if (wg.available()) {
+      unsigned long cardID = wg.getCode();
+      Serial.print("Card ID: 0x");
+      Serial.println(cardID, HEX);
+
+      // Convert cardID to String for sending to server
+      String cardData = String(cardID, HEX);
+      client.println(cardData); // Send the card data to the server
+      Serial.println("Card data sent to server");
+
+      // Wait for response from the server
+      while (client.connected() && !client.available()) {
+        delay(1); // Wait for data
+      }
+
+      // Read response from server
+      if (client.available()) {
+        String response = client.readStringUntil('\n');
+        Serial.println("Response from server: " + response);
+
+        // Check if the response contains the trigger command
+        if (response.startsWith("|OPENENE%")) {
+          triggerRelay(); // Trigger the relay
+        } else {
+          Serial.println("Invalid response from server");
+        }
+      } else {
+        Serial.println("No response from server");
+      }
+    }
+
+    client.stop(); // Close the connection after communication
+    Serial.println("Connection closed");
+  } else {
+    Serial.println("Connection failed");
+    digitalWrite(LED_PIN, HIGH); // Turn on LED for indication
+    delay(1000);
+    digitalWrite(LED_PIN, LOW); // Turn off LED
+  }
+
+  delay(1000); // Delay between connection attempts
+}
+
+void handleOfflineMode() {
+  // Placeholder for offline mode logic
+  if (wg.available()) {
+    unsigned long cardID = wg.getCode();
+    Serial.print("Card ID: 0x");
+    Serial.println(cardID, HEX);
+
+    // Validate card ID
+    if (validateCard(cardID)) {
+      triggerRelay(); // Trigger the relay if card is valid
+    } else {
+      Serial.println("Invalid card");
+    }
+  }
+
+  delay(1000); // Delay to prevent multiple readings
+}
+
+bool validateCard(unsigned long cardID) {
+  // Check if the card ID is in the list of master or visitor cards
+  for (int i = 0; i < totalMasterCards; i++) {
+    if (cardID == masterCardIDs[i]) {
+      Serial.println("Master card access");
+      return true;
+    }
+  }
+
+  for (int i = 0; i < totalVisitorCards; i++) {
+    if (cardID == visitorCardIDs[i]) {
+      Serial.println("Visitor card access");
+      // Perform ESD check for visitor cards
+      if (performESDCheck()) {
+        Serial.println("ESD check passed");
+        return true;
+      } else {
+        Serial.println("ESD check failed");
+        return false;
+      }
+    }
+  }
+
+  Serial.println("Warning!!!! Invalid member access");
+  return false;
+}
+
+bool performESDCheck() {
+  // Implement your ESD check logic here
+  // Return true if ESD check passes, false otherwise
+  // Example logic:
+  // Replace with actual ESD check logic, e.g., reading a sensor
+  bool esdPassed = digitalRead(ESD_PIN) == HIGH; // Example: Check if ESD pin is HIGH
+  return esdPassed;
+}
+
+void triggerRelay() {
+  digitalWrite(RELAY_PIN, HIGH);
+  delay(2000); // Relay on for 2 seconds
+  digitalWrite(RELAY_PIN, LOW);
+}
 
 
 
