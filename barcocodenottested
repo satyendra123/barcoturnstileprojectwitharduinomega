@@ -1,0 +1,198 @@
+#include <SPI.h>
+#include <Ethernet.h>
+#include <MFRC522.h>
+
+#define RELAY_PIN 7
+#define SS_PIN 53  // Pin for Ethernet Shield
+#define RST_PIN 5  // Pin connected to MFRC522 reset
+#define LED_PIN 6  // LED for indication
+
+// Replace with your network settings
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+IPAddress serverIP(192, 168, 1, 151);  // IP address of your TCP server
+int serverPort = 6000;  // Port number of your TCP server
+EthernetClient client;
+
+// MFRC522 setup
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+
+// List of master card UIDs (replace with actual UIDs)
+byte masterUIDs[][4] = {
+  { 0x4C, 0xCD, 0xD2, 0x22 },
+  // Add other master UIDs here...
+  { 0xAB, 0xCD, 0xEF, 0x12 }
+};
+
+// List of visitor card UIDs (replace with actual UIDs)
+byte visitorUIDs[][4] = {
+  { 0x34, 0xA2, 0xBC, 0x10 },
+  // Add other visitor UIDs here...
+  { 0x98, 0x76, 0x54, 0x32 }
+};
+
+int totalMasterUIDs = sizeof(masterUIDs) / sizeof(masterUIDs[0]);
+int totalVisitorUIDs = sizeof(visitorUIDs) / sizeof(visitorUIDs[0]);
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW);
+  digitalWrite(LED_PIN, LOW);
+
+  Ethernet.begin(mac);
+  delay(1500);  // Allow time to initialize Ethernet
+  Serial.println("Ethernet connected");
+  Serial.print("IP address: ");
+  Serial.println(Ethernet.localIP());
+
+  SPI.begin();
+  mfrc522.PCD_Init();
+  Serial.println("RFID reader initialized");
+}
+
+void loop() {
+  if (Ethernet.linkStatus() == LinkON) {
+    handleOnlineMode();
+  } else {
+    handleOfflineMode();
+  }
+}
+
+void handleOnlineMode() {
+  if (client.connect(serverIP, serverPort)) {
+    Serial.println("Connected to server");
+
+    if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
+      Serial.println("Card detected");
+
+      // Prepare the message to send to the server
+      String cardData = "";
+      for (byte i = 0; i < mfrc522.uid.size; ++i) {
+        cardData += String(mfrc522.uid.uidByte[i], HEX);
+      }
+      client.println(cardData); // Send the card data to the server
+      Serial.println("Card data sent to server: " + cardData);
+
+      // Wait for response from the server
+      while (client.connected() && !client.available()) {
+        delay(1); // Wait for data
+      }
+
+      // Read response from server
+      if (client.available()) {
+        String response = client.readStringUntil('\n');
+        Serial.println("Response from server: " + response);
+
+        // Check if the response contains the trigger command
+        if (response.startsWith("|OPENENE%")) {
+          triggerRelay(); // Trigger the relay
+        } else {
+          Serial.println("Invalid response from server");
+        }
+      } else {
+        Serial.println("No response from server");
+      }
+
+      delay(1000); // Delay to prevent multiple readings
+    }
+
+    client.stop(); // Close the connection after communication
+    Serial.println("Connection closed");
+  } else {
+    Serial.println("Connection failed");
+    digitalWrite(LED_PIN, HIGH); // Turn on LED for indication
+    delay(1000);
+    digitalWrite(LED_PIN, LOW); // Turn off LED
+  }
+
+  delay(1000); // Delay between connection attempts
+}
+
+
+void handleOfflineMode() {
+  if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
+    Serial.println("Card detected");
+
+    if (validateCard()) {
+      triggerRelay();
+    } else {
+      Serial.println("Invalid card");
+    }
+    delay(1000); // Delay to prevent multiple readings
+  }
+}
+
+bool validateCard() {
+  byte readCard[4];
+  memcpy(readCard, mfrc522.uid.uidByte, 4);
+
+  for (int i = 0; i < totalMasterUIDs; i++) {
+    if (memcmp(masterUIDs[i], readCard, 4) == 0) {
+      Serial.println("Master card access");
+      return true;
+    }
+  }
+
+  for (int i = 0; i < totalVisitorUIDs; i++) {
+    if (memcmp(visitorUIDs[i], readCard, 4) == 0) {
+      Serial.println("Visitor card access");
+      if (performESDCheck()) {
+        Serial.println("ESD check passed");
+        return true;
+      } else {
+        Serial.println("ESD check failed");
+        return false;
+      }
+    }
+  }
+
+  Serial.println("Warning!!!! Invalid member access");
+  return false;
+}
+
+bool performESDCheck() {
+  // Implement your ESD check logic here
+  // Return true if ESD check passes, false otherwise
+  return true; // Placeholder logic, modify as per your requirements
+}
+
+void triggerRelay() {
+  digitalWrite(RELAY_PIN, HIGH);
+  delay(2000); // Relay on for 2 seconds
+  digitalWrite(RELAY_PIN, LOW);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
