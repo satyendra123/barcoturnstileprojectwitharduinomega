@@ -1,0 +1,92 @@
+#step-1 models.py
+
+from django.db import models
+
+# Create your models here.
+from django.db import models
+
+class User(models.Model):
+    rfid = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=100)
+    esd_passed = models.BooleanField(default=False)
+    last_access = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return self.name
+
+class Attendance(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    date = models.DateField()
+    time_in = models.DateTimeField()
+    time_out = models.DateTimeField(null=True, blank=True)
+
+class AccessLog(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    gate = models.CharField(max_length=50)
+    access_time = models.DateTimeField(auto_now_add=True)
+    access_granted = models.BooleanField(default=False)
+
+class SystemStatus(models.Model):
+    last_reset = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"Last Reset: {self.last_reset}"
+
+#step-2 serializers.py
+from rest_framework import serializers
+from .models import User, Attendance, AccessLog
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = '__all__'
+
+class AttendanceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Attendance
+        fields = '__all__'
+
+class AccessLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AccessLog
+        fields = '__all__'
+
+#step-3 views.py
+from django.shortcuts import render
+# Create your views here.
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from django.utils import timezone
+from .models import User, Attendance, AccessLog
+from .serializers import UserSerializer, AccessLogSerializer
+
+@api_view(['POST'])
+def check_access(request):
+    rfid = request.data.get('rfid')
+    esd_status = request.data.get('esd_status')
+    gate = request.data.get('gate')
+
+    try:
+        user = User.objects.get(rfid=rfid)
+    except User.DoesNotExist:
+        return Response({"message": "Access Denied: RFID not recognized"}, status=400)
+
+    if not user.esd_passed:
+        if esd_status == 'pass':
+            user.esd_passed = True
+            user.last_access = timezone.now()
+            user.save()
+        else:
+            return Response({"message": "Access Denied: ESD Failed"}, status=400)
+
+    log = AccessLog.objects.create(user=user, gate=gate, access_granted=True)
+    
+    # Mark attendance if not already done
+    today = timezone.now().date()
+    attendance, created = Attendance.objects.get_or_create(user=user, date=today)
+    if created:
+        attendance.time_in = timezone.now()
+        attendance.save()
+        
+    User.objects.all().update(esd_passed=False)
+    return Response({"message": "Access Granted"}, status=200)
