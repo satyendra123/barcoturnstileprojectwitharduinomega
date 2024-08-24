@@ -1,0 +1,114 @@
+#include <SPI.h>
+#include <Ethernet.h>
+#include <FastLED.h>
+#include <Wiegand.h>
+
+#define LED_PIN         6
+#define NUM_LEDS        30
+#define ESD_PIN          2   // Pin connected to ESD reader
+#define RELAY_PIN        3   // Pin connected to relay
+#define WIEGAND_D0_PIN   4   // Wiegand Data 0 pin
+#define WIEGAND_D1_PIN   5   // Wiegand Data 1 pin
+
+CRGB leds[NUM_LEDS];
+
+// Define the MAC address and IP address for the Ethernet shield
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+IPAddress server(192, 168, 1, 100); // Django server IP address
+EthernetClient client;
+
+// RFID values stored in PROGMEM
+const char storedRFIDs[][12] PROGMEM = {
+  "123456789ABC",
+  "A1B2C3D4E5F6"
+  // Add more RFID values as needed
+};
+
+// Create a Wiegand object
+Wiegand wg;
+
+void setup() {
+  Ethernet.begin(mac);
+  delay(1000);
+
+  Serial.begin(9600);
+
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(ESD_PIN, INPUT);
+
+  FastLED.addLeds<NEOPIXEL, LED_PIN>(leds, NUM_LEDS);
+
+  wg.begin(WIEGAND_D0_PIN, WIEGAND_D1_PIN);
+}
+
+void loop() {
+  if (wg.available()) {
+    String rfid = String(wg.getCode(), HEX);
+    rfid.toUpperCase();
+
+    bool esdPassed = digitalRead(ESD_PIN) == HIGH;
+
+    if (Ethernet.connected()) {
+      // Online mode
+      String postData = "rfid=" + rfid + "&esd_passed=" + (esdPassed ? "true" : "false") + "&gate_number=1";
+      sendRequest(postData);
+    } else {
+      // Offline mode
+      if (isRFIDInProgmem(rfid)) {
+        setLEDColor(CRGB::Green);
+        digitalWrite(RELAY_PIN, HIGH);
+      } else {
+        setLEDColor(CRGB::Red);
+        digitalWrite(RELAY_PIN, LOW);
+      }
+    }
+  }
+
+  delay(1000); // Delay between scans
+}
+
+void sendRequest(String data) {
+  if (client.connect(server, 80)) {
+    client.println("POST /check_access/ HTTP/1.1");
+    client.println("Host: 192.168.1.100");
+    client.println("Content-Type: application/x-www-form-urlencoded");
+    client.println("Content-Length: " + String(data.length()));
+    client.println();
+    client.println(data);
+    client.stop();
+
+    while (client.available()) {
+      String response = client.readStringUntil('\r');
+      Serial.println(response);
+
+      if (response.indexOf("success") >= 0) {
+        setLEDColor(CRGB::Green);
+        digitalWrite(RELAY_PIN, HIGH);
+      } else {
+        setLEDColor(CRGB::Red);
+        digitalWrite(RELAY_PIN, LOW);
+      }
+    }
+  } else {
+    setLEDColor(CRGB::Yellow);
+  }
+}
+
+bool isRFIDInProgmem(String rfid) {
+  for (int i = 0; i < sizeof(storedRFIDs) / sizeof(storedRFIDs[0]); i++) {
+    char storedRFID[13];
+    strcpy_P(storedRFID, (char*)pgm_read_word(&(storedRFIDs[i])));
+    if (rfid == String(storedRFID)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void setLEDColor(CRGB color) {
+  for (int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = color;
+  }
+  FastLED.show();
+}
+
