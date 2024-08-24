@@ -1,24 +1,25 @@
-#step-1 models.py
+#step-1 access_control/models.py
 
 from django.db import models
-
-# Create your models here.
-from django.db import models
+from django.utils import timezone
 
 class User(models.Model):
     rfid = models.CharField(max_length=50, unique=True)
     name = models.CharField(max_length=100)
-    esd_passed = models.BooleanField(default=False)
-    last_access = models.DateTimeField(null=True, blank=True)
+    department = models.CharField(max_length=100)
+    designation = models.CharField(max_length=100)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.name
 
-class Attendance(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    date = models.DateField()
-    time_in = models.DateTimeField()
-    time_out = models.DateTimeField(null=True, blank=True)
+class ESDStatus(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    active = models.BooleanField(default=False)
+    last_updated = models.DateField(default=timezone.now)
+    def __str__(self):
+        return f"ESD Status for {self.user.name}"
 
 class AccessLog(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -26,67 +27,132 @@ class AccessLog(models.Model):
     access_time = models.DateTimeField(auto_now_add=True)
     access_granted = models.BooleanField(default=False)
 
-class SystemStatus(models.Model):
-    last_reset = models.DateTimeField(null=True, blank=True)
+    def __str__(self):
+        return f"{self.user.name} at {self.gate} on {self.access_time}"
+
+class TemporaryRFID(models.Model):
+    rfid = models.CharField(max_length=50, unique=True)
+    scanned_at = models.DateTimeField(default=timezone.now)
 
     def __str__(self):
-        return f"Last Reset: {self.last_reset}"
+        return self.rfid
 
-#step-2 serializers.py
+
+#step-2 access_control/serializers.py
 from rest_framework import serializers
-from .models import User, Attendance, AccessLog
+from .models import User, AccessLog,TemporaryRFID,ESDStatus
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = '__all__'
 
-class AttendanceSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Attendance
-        fields = '__all__'
 
 class AccessLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = AccessLog
         fields = '__all__'
+        
+class TemporaryRFIDSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TemporaryRFID
+        fields = '__all__'
 
-#step-3 views.py
-from django.shortcuts import render
-# Create your views here.
+class ESDStatusSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ESDStatus
+        fields = '__all__'
+
+
+#step-3 access_control/views.py
 from rest_framework.decorators import api_view
-from rest_framework.response import Response
+from django.http import JsonResponse
+from .models import User, AccessLog, ESDStatus, TemporaryRFID
 from django.utils import timezone
-from .models import User, Attendance, AccessLog
-from .serializers import UserSerializer, AccessLogSerializer
 
 @api_view(['POST'])
-def check_access(request):
-    rfid = request.data.get('rfid')
-    esd_status = request.data.get('esd_status')
-    gate = request.data.get('gate')
+def rfid_scan(request):
+    rfid = request.data.get('rfid') 
+    esd_passed = request.data.get('esd_passed') 
+    gate_number = int(request.data.get('gate_number', 1)) 
 
+    # Check if the ESDStatus needs to be reset
+    def reset_esd_status():
+        today = timezone.now().date()
+        esd_statuses = ESDStatus.objects.all()
+        for esd in esd_statuses:
+            if esd.last_updated != today:
+                esd.active = False
+                esd.last_updated = today
+                esd.save()
+
+    reset_esd_status()
+    # Check if the RFID is valid
     try:
         user = User.objects.get(rfid=rfid)
-    except User.DoesNotExist:
-        return Response({"message": "Access Denied: RFID not recognized"}, status=400)
-
-    if not user.esd_passed:
-        if esd_status == 'pass':
-            user.esd_passed = True
-            user.last_access = timezone.now()
-            user.save()
-        else:
-            return Response({"message": "Access Denied: ESD Failed"}, status=400)
-
-    log = AccessLog.objects.create(user=user, gate=gate, access_granted=True)
-    
-    # Mark attendance if not already done
-    today = timezone.now().date()
-    attendance, created = Attendance.objects.get_or_create(user=user, date=today)
-    if created:
-        attendance.time_in = timezone.now()
-        attendance.save()
+        today = timezone.now().date()
         
-    User.objects.all().update(esd_passed=False)
-    return Response({"message": "Access Granted"}, status=200)
+        if gate_number == 1:
+            # Handle Gate 1
+            if esd_passed.lower() == 'true':
+                access_granted = True
+                access_log = AccessLog.objects.create( user=user, gate=f"Gate {gate_number}", access_granted=access_granted)
+
+                # Update ESD status to active for the day
+                esd_status, _ = ESDStatus.objects.get_or_create(user=user)
+                esd_status.active = True
+                esd_status.last_updated = today
+                esd_status.save()
+
+                return JsonResponse({'status': 'success', 'message': 'Access granted, ESD status updated, gate opened.'})
+            else:
+                access_granted = False
+                AccessLog.objects.create(
+                    user=user, gate=f"Gate {gate_number}", access_granted=access_granted
+                )
+                return JsonResponse({'status': 'error', 'message': 'Access denied. ESD pass required.'})
+
+        elif gate_number == 2:
+            # Handle Gate 2
+            esd_status = ESDStatus.objects.filter(user=user).first()
+
+            if esd_status and esd_status.active:
+                access_granted = True
+                message = 'Access granted, gate opened.'
+                
+            elif esd_passed.lower() == 'true':
+                access_granted = True
+                message = 'Access granted, gate opened.'
+                
+            else:
+                access_granted = False
+                message = 'Access denied. ESD pass required.'
+
+            AccessLog.objects.create(user=user, gate=f"Gate {gate_number}", access_granted=access_granted)
+
+            return JsonResponse({'status': 'success' if access_granted else 'error', 'message': message})
+
+    except User.DoesNotExist:
+        temp_rfid, created = TemporaryRFID.objects.get_or_create(rfid=rfid)
+        return JsonResponse({'status': 'error', 'message': 'User not found. RFID stored temporarily for registration.'})
+
+@api_view(['GET'])
+def get_unregistered_rfids(request):
+    rfids = TemporaryRFID.objects.all().values('rfid', 'scanned_at')
+    return JsonResponse(list(rfids), safe=False)
+
+@api_view(['DELETE'])
+def delete_temp_rfids(request):
+    TemporaryRFID.objects.all().delete()
+    return JsonResponse({'status': 'success', 'message': 'All temporary RFID data deleted.'})
+
+@api_view(['POST'])
+def register_user(request):
+    rfid = request.data.get('rfid')
+    name = request.data.get('name')
+    department = request.data.get('department')
+    designation = request.data.get('designation')
+    user = User.objects.create(rfid=rfid, name=name, department=department, designation=designation)
+    TemporaryRFID.objects.filter(rfid=rfid).delete()
+
+    return JsonResponse({'status': 'success', 'message': 'User registered successfully.'})
