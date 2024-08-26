@@ -148,7 +148,7 @@ def rfid_scan(request):
         return JsonResponse({'status': 'error', 'message': 'User not found. RFID stored temporarily for registration.'})
 
 @api_view(['GET'])
-def get_data(request):
+def get_unregistered_rfids(request):
     latest_rfid = TemporaryRFID.objects.order_by('-scanned_at').values('rfid').first()
     if latest_rfid:
         return JsonResponse(latest_rfid, safe=False)
