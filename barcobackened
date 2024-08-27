@@ -66,14 +66,25 @@ class ESDStatusSerializer(serializers.ModelSerializer):
 
 #step-3 access_controller/mainurls.py
 from django.urls import path
-from .views import check_access, get_unregistered_rfids, register_user, delete_all_temp_rfids
+from .views import rfid_scan, get_unregistered_rfids, register_user, delete_temp_rfids
 
 urlpatterns = [
-    path('check_access', rfid_scan, name='rfid_scan'),
-    path('get_data', get_unregistered_rfids, name='get_unregistered_rfids'),
-    path('register_user', register_user, name='register_user'),
-    path('del_temp', delete_all_temp_rfids, name='delete_all_temp_rfids'),
+    path('check_access', rfid_scan, name='check_access'),
+    path('get_data', get_unregistered_rfids, name='get_data'),
+    path('register', register_user, name='register'),
+    path('del_temp', delete_temp_rfids, name='del_temp'),
 ]
+
+#step-4 main_urls.py
+
+from django.contrib import admin
+from django.urls import path, include
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path("", include("access_control.urls")), 
+]
+
 
 #step-4 access_control/views.py
 from rest_framework.decorators import api_view
